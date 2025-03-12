@@ -1,0 +1,153 @@
+services:
+  ollama:
+    container_name: ollama
+    volumes:
+      - ollama:/root/.ollama
+    pull_policy: always
+    tty: true
+    restart: unless-stopped
+    image: ollama/ollama:${OLLAMA_DOCKER_TAG-latest} # GPU support
+    ports:
+      - 0.0.0.0:11434:11434
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: ${OLLAMA_GPU_DRIVER-nvidia}
+              count: ${OLLAMA_GPU_COUNT-1}
+              capabilities:
+                - gpu
+    networks:
+      - openwebui-network
+
+  open-webui:
+    container_name: open-webui
+    image: open-webui:custom-v2
+    volumes:
+      - ./backend:/app/backend
+      - ./src:/app/src
+      - ./static:/app/static
+      - ./build:/app/build
+      - open-webui:/app/backend/data
+    depends_on:
+      - ollama
+    ports:
+      - 0.0.0.0:${OPEN_WEBUI_PORT-3000}:8080
+    environment:
+      - 'OLLAMA_BASE_URL=${OLLAMA_BASE_URL}'
+      - 'WEBUI_SECRET_KEY='
+      - 'USE_CUDA=true'
+      - 'USE_CUDA_VER=cu121'
+      - 'NVIDIA_VISIBLE_DEVICES=all'
+      - 'NVIDIA_DRIVER_CAPABILITIES=all'
+      - 'ENV=dev'
+      - 'WEBUI_NAME=${WEBUI_NAME}'
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - openwebui-network
+      - openwebui-searxng-network
+
+  pipelines:
+    image: ghcr.io/open-webui/pipelines:main
+    container_name: pipelines
+    ports:
+      - 0.0.0.0:9099:9099
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - pipelines:/app/pipelines
+    restart: always
+    networks:
+      - openwebui-network
+      - openwebui-searxng-network
+
+  redis:
+    container_name: redis
+    image: docker.io/valkey/valkey:8-alpine
+    command: redis-server --save 30 1 --loglevel warning
+    restart: unless-stopped
+    networks:
+      - openwebui-searxng-network
+    volumes:
+      - valkey-data2:/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '1m'
+        max-file: '1'
+
+  searxng:
+    container_name: searxng
+    image: docker.io/searxng/searxng:latest
+    restart: unless-stopped
+    networks:
+      - openwebui-searxng-network
+    ports:
+      - 0.0.0.0:1337:8080
+    volumes:
+      - /home/thewatcher/projets/open-webui/searxng-docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - /home/thewatcher/projets/open-webui/searxng-docker/searxng/uwsgi.ini:/etc/searxng/uwsgi.ini:ro
+      - /home/thewatcher/projets/open-webui/searxng-docker/searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+    environment:
+      - UWSGI_WORKERS=${SEARXNG_UWSGI_WORKERS:-4}
+      - UWSGI_THREADS=${SEARXNG_UWSGI_THREADS:-4}
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: 'json-file'
+      options:
+        max-size: '1m'
+        max-file: '1'
+
+  n8n:
+    container_name: n8n
+    image: n8nio/n8n:latest
+    ports:
+      - 0.0.0.0:5678:5678
+    networks:
+      - openwebui-network
+      - openwebui-searxng-network
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  tika:
+    container_name: tika
+    image: apache/tika:latest-full
+    ports:
+      - 0.0.0.0:9998:9998
+    restart: unless-stopped
+    volumes:
+      - tika-data:/data
+    networks:
+      - openwebui-network
+
+networks:
+  openwebui-network:
+  openwebui-searxng-network:
+
+volumes:
+  ollama: {}
+  open-webui: {}
+  valkey-data2: {}
+  n8n_data: {}
+  tika-data: {}
+  pipelines: {}
